@@ -8,7 +8,7 @@ library(sf)
 
 col1 = "#013C58"
 col2 = "#E69C38"
-col3 = "#800000"
+col3 = "#900000"
 col4 = "#808000"
 col5 = "#104C00"
 col6 = "#7195C1"
@@ -18,7 +18,7 @@ szinek <- c(col1, col2, col3, col4, col5, col6, col7, col8)
 
 ### PENSION
 # Pension data for Hungary 2000-2023
-pension_data <- read_xlsx("C:/Nandi/BPM/Szakdoga/adatok/pension_by_region.xlsx")
+pension_data <- readxl::read_xlsx("C:/Nandi/BPM/Szakdoga/adatok/pension_by_region.xlsx")
 
 # Pensions by region (and by age for females)
 data %>% 
@@ -193,7 +193,24 @@ data %>%
 
 results %>% 
   ggplot(aes(x=birth_year, y=irr_r)) + 
-  geom_point(aes(shape=sex, colour = geo))
+  facet_grid(~geo) +
+  geom_hline(yintercept = c(seq(0, 0.04, 0.005)), col="lightgrey", linetype="dashed")+
+  geom_point(aes(colour = sex, shape = sex)) +
+  theme(text=element_text(size=14, family="serif"),
+        axis.text.x = element_text(angle = 45, vjust = 0.7),
+        panel.background = element_rect(fill = "white"),
+        plot.title = element_text(size = 16),
+        axis.title.y = element_text(size = 14),
+        axis.text = element_text(size = 12),
+        legend.text = element_text(size = 13),
+        axis.line = element_line(),
+        legend.key = element_rect(fill = "white"),
+        legend.position = "top",
+        legend.title = element_blank())+
+  scale_y_continuous(labels = scales::percent_format(accuracy = 0.01)) +
+  scale_color_manual(values=c("F"=col3,"M"=col5), labels = c("Nő","Férfi")) +
+  scale_shape_manual(values=c(19,17), labels=c("Nő", "Férfi"))+
+  labs(y="Reál IRR", x="Születési év")
 
 
 ### MAP
@@ -236,7 +253,8 @@ ggplot(aes(fill=irr_n), data = regions) +
   geom_sf(size=0.1, color="#F3F3F3") +
   geom_text(aes(x = x, y = y, label = NUTS_NAME), size = 4, family = "serif") + 
   geom_text(aes(x = x, y = y-0.1, label = scales::percent(irr_n, accuracy = 0.01,
-                                                          decimal.mark = ",")),            size = 4, family = "serif") +
+                                                          decimal.mark = ",")),
+            size = 4, family = "serif") +
   coord_sf(crs = st_crs(regions)) + 
   scale_fill_gradientn(colours = vector_colors_gradient_2) +
   #labs(fill = "IRR") +
@@ -262,3 +280,99 @@ ggplot(aes(fill=pers_inc_2023), data = regions) +
   #labs(fill = "IRR") +
   theme_void() +
   theme(legend.position = "none")
+
+
+### COMBINED MAP
+
+# Load necessary libraries
+library(grid)
+
+# Get NUTS 2 shapefile from Eurostat
+nuts2 <- get_eurostat_geospatial(output_class = "sf", resolution = "1", nuts_level = "2", year=2013)
+
+# Filter for Hungary (NUTS code starts with "HU")
+hungary_nuts2 <- nuts2 %>% filter(stringr::str_starts(NUTS_ID, "HU")) %>% 
+  mutate(center = st_centroid(geometry),
+         xa = st_coordinates(center)[, 1],
+         ya = st_coordinates(center)[, 2])
+
+# Sample data: Replace this with your actual data
+data <- data.frame(
+  NUTS_ID = c("HU10", "HU21", "HU22", "HU23", "HU31", "HU32", "HU33"),
+  Ffi = rep(NA, 7),
+  No = rep(NA, 7)
+)
+
+for (selected_byear in c(1970, 1975, 1980, 1985)) {
+  
+
+for (i in 1:nrow(data)) {
+  data[i, 'Ffi'] <- results %>% filter(sex=="M",
+                                       birth_year==selected_byear,
+                                       geo==data[i, 'NUTS_ID']) %>% 
+    select(irr_r)
+  data[i, 'No'] <- results %>% filter(sex=="F",
+                                       birth_year==selected_byear,
+                                       geo==data[i, 'NUTS_ID']) %>% 
+    select(irr_r)
+}
+
+# Merge the data with the geographical data
+hungary_data <- hungary_nuts2 %>%
+  left_join(data, by = "NUTS_ID")
+
+# Calculate centroids of each region
+hungary_data <- hungary_data %>%
+  mutate(centroid = st_centroid(geometry))
+
+# Create a function to plot bar charts at the centroids
+plot_barchart <- function(x, y, region_data) {
+  p <- ggplot(region_data, aes(x = gender, y = value, fill = gender, label = value)) +
+    geom_bar(stat = "identity", width = 2, position = position_dodge2(padding = 0.1)) +
+    geom_text(aes(label = scales::percent(value, accuracy = 0.1, decimal.mark = ",", suffix = "")),
+              vjust = 1.2,
+              color = "white", size = 5.2, position = position_dodge2(padding = 0.1),
+              family="serif", fontface = "bold") +
+    geom_text(aes(label = substr(gender, 1, 1)),
+              vjust = 3,
+              color = "white", size = 5, position = position_dodge2(padding = 0.1),
+              family="serif", fontface = "bold") +
+    scale_fill_manual(values = c("Ffi" = col5, "No" = col3)) +
+    theme_void() +
+    theme(legend.position = "none") # Ensure legend is removed
+  
+  ggplotGrob(p)
+}
+
+# Base map
+base_map <- ggplot(data = hungary_data) +
+  geom_sf() +
+  theme_void() +
+  geom_text(aes(x = xa, y = ya-0.15, label = NUTS_NAME), size = 5, family = "serif") 
+  
+base_map
+
+# Create the map with bar charts at centroids
+for (i in seq_len(nrow(hungary_data))) {
+  region <- hungary_data[i, ]
+  centroid <- st_coordinates(region$centroid)
+  region_data <- data %>% filter(NUTS_ID == region$NUTS_ID) %>%
+    pivot_longer(cols = c(Ffi, No), names_to = "gender", values_to = "value")
+  
+  bar_grob <- plot_barchart(centroid[1], centroid[2], region_data)
+  
+  base_map <- base_map +
+    annotation_custom(bar_grob, xmin = centroid[1] - 0.27, xmax = centroid[1] + 0.27, ymin = centroid[2] - 0.1, ymax = centroid[2] + 0.4) +
+    theme(plot.title = element_text(family="serif", hjust = 0.5, vjust = -5, size = 25))+
+    labs(title = paste0("Születési év: ", selected_byear))
+}
+
+# Print the combined plot
+print(base_map)
+
+}
+
+
+
+
+
